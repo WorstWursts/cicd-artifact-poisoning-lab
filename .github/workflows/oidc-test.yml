@@ -1,0 +1,56 @@
+name: OIDC Token Test
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write    # claim it — does GitHub honor it on fork PRs?
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check OIDC env vars
+        run: |
+          echo "=== ACTIONS_ID_TOKEN_REQUEST_URL set? ==="
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+            echo "YES — URL is present"
+            echo "URL length: ${#ACTIONS_ID_TOKEN_REQUEST_URL}"
+          else
+            echo "NO — empty"
+          fi
+
+          echo ""
+          echo "=== ACTIONS_ID_TOKEN_REQUEST_TOKEN set? ==="
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            echo "YES — token is present"
+            echo "Token length: ${#ACTIONS_ID_TOKEN_REQUEST_TOKEN}"
+          else
+            echo "NO — empty"
+          fi
+
+          echo ""
+          echo "=== Try to mint an actual OIDC token ==="
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            response=$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=cosmos-test" 2>&1)
+            if [ -n "$response" ]; then
+              # Decode JWT payload (middle part) to show claims
+              jwt=$(echo "$response" | grep -oE '"value":"[^"]+"' | sed 's/"value":"//;s/"$//')
+              if [ -n "$jwt" ]; then
+                echo "MINTED A REAL OIDC TOKEN!"
+                payload=$(echo "$jwt" | cut -d. -f2)
+                # base64 padding fix
+                padded="${payload}$(printf '%*s' $((4 - ${#payload} % 4)) '' | tr ' ' '=')"
+                echo "JWT claims:"
+                echo "$padded" | base64 -d 2>/dev/null | head -c 800
+                echo ""
+              else
+                echo "Failed to extract JWT from response"
+                echo "$response" | head -c 200
+              fi
+            fi
+          fi
