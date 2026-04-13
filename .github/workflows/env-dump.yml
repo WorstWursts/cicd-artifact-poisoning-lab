@@ -1,22 +1,51 @@
-name: Env Dump (proves ACTIONS_RUNTIME_TOKEN is available in fork PR runs)
+name: Env Dump (test ACTIONS_RUNTIME_TOKEN availability)
 on:
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read   # explicitly minimal — proving these vars don't depend on permissions
+  contents: read
 
 jobs:
-  dump:
+  dump-no-action:
     runs-on: ubuntu-latest
     steps:
-      - name: Show ACTIONS_* env vars (without leaking the actual token)
+      - name: Step 1 — no actions used yet
         run: |
-          echo "=== Env vars whose names start with ACTIONS_ ==="
-          env | grep -E '^ACTIONS_' | awk -F= '{print $1 "=" substr($2,1,20) "..."}'
-          echo ""
-          echo "=== ACTIONS_RUNTIME_TOKEN length ==="
-          echo "${#ACTIONS_RUNTIME_TOKEN} characters"
-          echo ""
-          echo "=== ACTIONS_RESULTS_URL ==="
-          echo "$ACTIONS_RESULTS_URL"
+          echo "=== JOB A: pure run step, no actions ==="
+          env | grep -E '^ACTIONS_' | awk -F= '{print $1 "=" substr($2,1,30) "..."}'
+          echo "TOKEN_LEN=${#ACTIONS_RUNTIME_TOKEN}"
+
+  dump-with-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Step 1 — BEFORE upload-artifact
+        run: |
+          echo "=== JOB B Step 1: before upload-artifact ==="
+          env | grep -E '^ACTIONS_' | awk -F= '{print $1 "=" substr($2,1,30) "..."}'
+          echo "TOKEN_LEN=${#ACTIONS_RUNTIME_TOKEN}"
+
+      - name: Create dummy file
+        run: echo "test" > dummy.txt
+
+      - name: Use upload-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: env-dump-test-${{ github.run_id }}
+          path: dummy.txt
+
+      - name: Step 4 — AFTER upload-artifact
+        run: |
+          echo "=== JOB B Step 4: after upload-artifact ==="
+          env | grep -E '^ACTIONS_' | awk -F= '{print $1 "=" substr($2,1,30) "..."}'
+          echo "TOKEN_LEN=${#ACTIONS_RUNTIME_TOKEN}"
+
+  dump-with-checkout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: After checkout (non-artifact action)
+        run: |
+          echo "=== JOB C: after checkout ==="
+          env | grep -E '^ACTIONS_' | awk -F= '{print $1 "=" substr($2,1,30) "..."}'
+          echo "TOKEN_LEN=${#ACTIONS_RUNTIME_TOKEN}"
