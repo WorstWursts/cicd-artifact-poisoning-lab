@@ -5,7 +5,7 @@ set -euo pipefail
 # This is the consumer that turns artifact poisoning into RCE.
 
 # UPDATE THIS to your own GitHub username when you set up the lab:
-NIGHTLY_BASE_URL="https://Zashk0.github.io/cicd-artifact-poisoning-lab/nightlies/latest"
+NIGHTLY_BASE_URL="https://Zashk0.github.io/cicd-artifact-poisoning-lab/nightlies/v0.54"
 
 archive_url="${NIGHTLY_BASE_URL}/myapp-linux-amd64.tar.gz"
 checksum_url="${NIGHTLY_BASE_URL}/myapp-linux-amd64.tar.gz.sha256"
